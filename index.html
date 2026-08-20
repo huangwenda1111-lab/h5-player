@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Plyr 直播播放器 - 微信H5</title>
+
+<!-- Plyr 样式 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css" />
+
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f5f5f7;
+    margin: 0;
+    padding: 16px;
+  }
+  .container {
+    max-width: 600px;
+    margin: 0 auto;
+    background: #fff;
+    padding: 16px;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+  }
+  h2 {
+    margin-top: 0;
+    text-align: center;
+  }
+  .tips {
+    color: #888;
+    font-size: 14px;
+    margin-bottom: 12px;
+    text-align: center;
+  }
+  input, select, button {
+    width: 100%;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    box-sizing: border-box;
+    font-size: 16px;
+  }
+  button {
+    background: #007aff;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+  }
+  button.test {
+    background: #34c759;
+  }
+  #playerWrap {
+    margin-top: 10px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #000;
+  }
+  #status {
+    color: #666;
+    font-size: 14px;
+    margin-top: 10px;
+    min-height: 20px;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h2>Plyr 直播播放器</h2>
+  <p class="tips">支持 M3U8（HLS）和 FLV，可在微信中打开测试</p>
+
+  <button class="test" onclick="loadTest('m3u8')">测试 M3U8 直播流</button>
+  <button class="test" onclick="loadTest('flv')">测试 FLV 流（点播示例）</button>
+
+  <input type="text" id="urlInput" placeholder="输入直播流地址，例如 .m3u8 或 .flv" />
+  <select id="typeSelect">
+    <option value="auto">自动检测格式</option>
+    <option value="m3u8">M3U8 / HLS</option>
+    <option value="flv">FLV</option>
+  </select>
+  <button onclick="startPlay()">播放</button>
+
+  <div id="playerWrap">
+    <video id="player" controls playsinline webkit-playsinline muted></video>
+  </div>
+  <p id="status"></p>
+</div>
+
+<!-- 流媒体解析库 + Plyr -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/flv.js@1.6.2/dist/flv.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.min.js"></script>
+
+<script>
+  const video = document.getElementById('player');
+  let plyrInstance = null;
+  let hlsInstance = null;
+  let flvInstance = null;
+
+  // 初始化 Plyr
+  function initPlyr() {
+    if (plyrInstance) {
+      plyrInstance.destroy();
+    }
+    plyrInstance = new Plyr(video, {
+      controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'fullscreen'],
+      muted: true,              // 初始静音，提高自动播放成功率，用户可手动开启声音
+      autoplay: false
+    });
+  }
+
+  // 销毁旧播放器实例，避免冲突
+  function destroyPlayers() {
+    if (hlsInstance) {
+      hlsInstance.destroy();
+      hlsInstance = null;
+    }
+    if (flvInstance) {
+      try { flvInstance.destroy(); } catch(e) {}
+      flvInstance = null;
+    }
+    try {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    } catch(e) {}
+  }
+
+  function setStatus(msg) {
+    document.getElementById('status').textContent = msg;
+  }
+
+  // 点击播放按钮
+  function startPlay() {
+    const url = document.getElementById('urlInput').value.trim();
+    const type = document.getElementById('typeSelect').value;
+    if (!url) {
+      alert('请输入直播流地址');
+      return;
+    }
+    playUrl(url, type);
+  }
+
+  // 测试按钮
+  function loadTest(type) {
+    let url = '';
+    if (type === 'm3u8') {
+      url = 'https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8';
+    } else if (type === 'flv') {
+      url = 'https://sf1-cdn-tos.huoshanstatic.com/obj/media-fe/xgplayer_doc_video/flv/xgplayer-demo-360p.flv';
+    }
+    document.getElementById('urlInput').value = url;
+    document.getElementById('typeSelect').value = type;
+    playUrl(url, type);
+  }
+
+  // 主播放逻辑
+  function playUrl(url, type) {
+    destroyPlayers();
+    initPlyr();
+    setStatus('准备播放：' + url);
+
+    // 自动检测格式
+    if (type === 'auto') {
+      if (/\.m3u8($|\?)/i.test(url)) {
+        type = 'm3u8';
+      } else if (/\.flv($|\?)/i.test(url)) {
+        type = 'flv';
+      } else {
+        setStatus('无法自动识别格式，请手动选择 M3U8 或 FLV');
+        return;
+      }
+    }
+
+    if (type === 'm3u8') {
+      playM3U8(url);
+    } else if (type === 'flv') {
+      playFLV(url);
+    }
+  }
+
+  // 播放 HLS / M3U8
+  function playM3U8(url) {
+    if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+      // Android 微信、Chrome、Edge 等使用 hls.js
+      hlsInstance = new Hls({
+        liveDurationInfinity: true,   // 直播流常用
+        enableWorker: true
+      });
+      hlsInstance.loadSource(url);
+      hlsInstance.attachMedia(video);
+
+      hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
+        plyrInstance.play().catch(() => {});
+        setStatus('HLS 直播已就绪（hls.js 解析）');
+      });
+
+      hlsInstance.on(Hls.Events.ERROR, function(e, data) {
+        if (data.fatal) {
+          setStatus('HLS 播放错误: ' + data.type + ' - ' + (data.details || ''));
+          console.error('HLS fatal error:', data);
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // iOS 微信 / Safari 原生支持 HLS
+      video.src = url;
+      video.addEventListener('loadedmetadata', function() {
+        plyrInstance.play().catch(() => {});
+        setStatus('HLS 原生播放已就绪（iOS 原生）');
+      });
+    } else {
+      setStatus('当前浏览器不支持 HLS 播放');
+    }
+  }
+
+  // 播放 FLV
+  function playFLV(url) {
+    if (typeof flvjs !== 'undefined' && flvjs.isSupported()) {
+      // flv.js 依赖 MSE，主要支持 Android Chrome/微信、桌面 Chrome
+      flvInstance = flvjs.createPlayer({
+        type: 'flv',
+        url: url,
+        isLive: true          // 直播模式；如果你的 FLV 是点播，可以改成 false
+      });
+      flvInstance.attachMediaElement(video);
+      flvInstance.load();
+      flvInstance.play().then(() => {
+        setStatus('FLV 直播已就绪（flv.js 解析）');
+      }).catch(err => {
+        setStatus('FLV 播放失败: ' + err.message);
+        console.error('FLV play error:', err);
+      });
+    } else {
+      setStatus('当前浏览器不支持 FLV 播放（iOS 微信通常不支持 MSE，无法播放 FLV）');
+    }
+  }
+</script>
+
+</body>
+</html>
